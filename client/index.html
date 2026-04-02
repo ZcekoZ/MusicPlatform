@@ -1,16 +1,65 @@
-
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Music App</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Musicify</title>
+  <link rel="stylesheet" href="./css/style.css">
 </head>
 <body>
-  <h1>Music Search</h1>
-  <input id="search" />
-  <button onclick="search()">Search</button>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div>
+        <h1>Musicify</h1>
+        <p class="muted">Deezer 30-second previews, likes, playlists, and artist pages.</p>
+      </div>
 
-  <div id="results"></div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="home">Home</button>
+        <button class="nav-btn" data-view="likes">Likes</button>
+        <button class="nav-btn" data-view="playlists">Playlists</button>
+        <button class="nav-btn" data-view="artists">Artists</button>
+      </nav>
 
-  <script src="js/app.js"></script>
+      <section class="create-playlist-card">
+        <h3>Create playlist</h3>
+        <form id="playlist-form">
+          <input id="playlist-name" type="text" placeholder="Playlist name" required>
+          <textarea id="playlist-description" placeholder="Description"></textarea>
+          <button type="submit">Save playlist</button>
+        </form>
+      </section>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Demo user</p>
+          <h2 id="view-title">Browse songs</h2>
+        </div>
+        <p id="status" class="status">Ready</p>
+      </header>
+
+      <section id="view-content" class="view-content"></section>
+    </main>
+  </div>
+
+  <footer class="player-bar">
+    <div class="now-playing">
+      <img id="now-playing-cover" src="" alt="" class="now-playing-cover hidden">
+      <div>
+        <p class="eyebrow">Now playing</p>
+        <h3 id="now-playing-title">Nothing selected</h3>
+        <p id="now-playing-meta" class="muted">Pick a song to start the 30-second preview.</p>
+      </div>
+    </div>
+
+    <div class="player-controls">
+      <audio id="player" controls></audio>
+    </div>
+  </footer>
+
+  <script src="./js/api.js"></script>
+  <script src="./js/app.js"></script>
 </body>
 </html>

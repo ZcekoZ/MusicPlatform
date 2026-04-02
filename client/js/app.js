@@ -1,31 +1,408 @@
+const state = {
+  view: "home",
+  songs: [],
+  likes: [],
+  playlists: [],
+  artists: [],
+  currentArtist: null,
+  currentPlaylist: null
+};
 
-let currentAudio = new Audio();
+const els = {
+  content: document.getElementById("view-content"),
+  title: document.getElementById("view-title"),
+  status: document.getElementById("status"),
+  player: document.getElementById("player"),
+  nowPlayingTitle: document.getElementById("now-playing-title"),
+  nowPlayingMeta: document.getElementById("now-playing-meta"),
+  nowPlayingCover: document.getElementById("now-playing-cover"),
+  navButtons: Array.from(document.querySelectorAll(".nav-btn")),
+  playlistForm: document.getElementById("playlist-form"),
+  playlistName: document.getElementById("playlist-name"),
+  playlistDescription: document.getElementById("playlist-description")
+};
 
-async function search() {
-  const q = document.getElementById('search').value;
-  const res = await fetch(`/api/deezer/search?q=${q}`);
-  const data = await res.json();
+function setStatus(message) {
+  els.status.textContent = message;
+}
 
-  const list = document.getElementById('results');
-  list.innerHTML = '';
+function formatDuration(seconds) {
+  const mins = Math.floor(Number(seconds || 0) / 60);
+  const secs = Number(seconds || 0) % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
 
-  data.forEach(track => {
-    const div = document.createElement('div');
-    div.innerHTML = `
-      ${track.title} - ${track.artist.name}
-      <button onclick="play('${track.preview}')">Play</button>
-      <button onclick="like(${track.id})">❤️</button>
-    `;
-    list.appendChild(div);
+function formatNumber(value) {
+  return new Intl.NumberFormat().format(Number(value || 0));
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function syncNav() {
+  els.navButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.view);
   });
 }
 
-function play(url) {
-  currentAudio.src = url;
-  currentAudio.play();
+function emptyState(message) {
+  return `<div class="empty-state">${escapeHtml(message)}</div>`;
 }
 
-async function like(id) {
-  await fetch('/api/likes/' + id, { method: 'POST' });
-  alert('Liked!');
+function songCard(song, options = {}) {
+  const playlistOptions = state.playlists.length
+    ? state.playlists.map((playlist) => `<option value="${playlist.playlist_id}">${escapeHtml(playlist.name)}</option>`).join("")
+    : "";
+
+  return `
+    <article class="song-card">
+      <img src="${escapeHtml(song.cover_url || song.album_cover || "https://via.placeholder.com/200x200?text=Music")}" alt="${escapeHtml(song.title)}">
+      <div class="song-meta">
+        <h3>${escapeHtml(song.title)}</h3>
+        <p>${escapeHtml(song.artist_name || "Unknown artist")}${song.album_title ? ` • ${escapeHtml(song.album_title)}` : ""}</p>
+        <div class="badge-row">
+          <span class="badge">${formatDuration(song.duration_seconds)}</span>
+          <span class="badge">${formatNumber(song.plays_count)} plays</span>
+          ${song.explicit ? '<span class="badge">Explicit</span>' : ""}
+        </div>
+      </div>
+      <div class="song-actions">
+        <button class="primary-btn" data-action="play-song" data-song-id="${song.song_id}" data-source="${escapeHtml(options.source || state.view)}">Play preview</button>
+        <button class="${song.liked ? "liked" : ""}" data-action="toggle-like" data-song-id="${song.song_id}" data-liked="${song.liked ? "1" : "0"}">${song.liked ? "Unlike" : "Like"}</button>
+        ${song.artist_id ? `<button data-action="open-artist" data-artist-id="${song.artist_id}">Artist page</button>` : ""}
+        ${state.playlists.length ? `
+          <select data-action="playlist-select" data-song-id="${song.song_id}">
+            <option value="">Add to playlist…</option>
+            ${playlistOptions}
+          </select>
+        ` : ""}
+        ${options.removableFromPlaylist ? `<button class="danger" data-action="remove-from-playlist" data-playlist-id="${options.removableFromPlaylist}" data-song-id="${song.song_id}">Remove</button>` : ""}
+      </div>
+    </article>
+  `;
 }
+
+function renderHome() {
+  els.title.textContent = "Browse songs";
+  const likesCount = state.likes.length;
+  const playlistsCount = state.playlists.length;
+  const artistsCount = state.artists.length;
+
+  els.content.innerHTML = `
+    <section class="stats-grid">
+      <div class="stat-card"><p class="eyebrow">Songs</p><h3>${state.songs.length}</h3><p class="muted">Playable with Deezer previews.</p></div>
+      <div class="stat-card"><p class="eyebrow">Liked songs</p><h3>${likesCount}</h3><p class="muted">Saved by the demo user.</p></div>
+      <div class="stat-card"><p class="eyebrow">Playlists</p><h3>${playlistsCount}</h3><p class="muted">Personal collections.</p></div>
+      <div class="stat-card"><p class="eyebrow">Artists</p><h3>${artistsCount}</h3><p class="muted">Dedicated artist pages.</p></div>
+    </section>
+    <section class="panel">
+      <p class="eyebrow">Library</p>
+      <h3>All songs</h3>
+      <div class="song-list">
+        ${state.songs.map((song) => songCard(song, { source: "home" })).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderLikes() {
+  els.title.textContent = "Liked songs";
+  els.content.innerHTML = state.likes.length
+    ? `<section class="panel"><div class="song-list">${state.likes.map((song) => songCard(song, { source: "likes" })).join("")}</div></section>`
+    : emptyState("No liked songs yet. Tap Like on a track to save it here.");
+}
+
+function renderPlaylists() {
+  els.title.textContent = state.currentPlaylist ? state.currentPlaylist.name : "Playlists";
+
+  if (state.currentPlaylist) {
+    const playlist = state.currentPlaylist;
+    els.content.innerHTML = `
+      <section class="detail-panel">
+        <div class="detail-header">
+          <img src="${escapeHtml(playlist.songs[0]?.cover_url || "https://via.placeholder.com/300x300?text=Playlist")}" alt="${escapeHtml(playlist.name)}">
+          <div>
+            <p class="eyebrow">Playlist</p>
+            <h3>${escapeHtml(playlist.name)}</h3>
+            <p class="muted">${escapeHtml(playlist.description || "No description yet.")}</p>
+            <div class="badge-row">
+              <span class="badge">${playlist.songs.length} songs</span>
+            </div>
+            <div class="actions">
+              <button class="inline-btn" data-action="back-to-playlists">Back to playlists</button>
+            </div>
+          </div>
+        </div>
+        ${playlist.songs.length ? `<div class="song-list">${playlist.songs.map((song) => songCard(song, { source: "playlist", removableFromPlaylist: playlist.playlist_id })).join("")}</div>` : emptyState("This playlist is empty. Add songs from Home or Artist pages.")}
+      </section>
+    `;
+    return;
+  }
+
+  els.content.innerHTML = state.playlists.length
+    ? `<section class="playlist-grid">${state.playlists.map((playlist) => `
+        <article class="playlist-card">
+          <img src="${escapeHtml(playlist.cover_url || "https://via.placeholder.com/500x500?text=Playlist")}" alt="${escapeHtml(playlist.name)}">
+          <p class="eyebrow">Playlist</p>
+          <h3>${escapeHtml(playlist.name)}</h3>
+          <p class="muted">${escapeHtml(playlist.description || "No description")}</p>
+          <div class="badge-row">
+            <span class="badge">${playlist.songs_count} songs</span>
+            <span class="badge">${formatDuration(playlist.total_duration_seconds || 0)}</span>
+          </div>
+          <button data-action="open-playlist" data-playlist-id="${playlist.playlist_id}">Open playlist</button>
+        </article>
+      `).join("")}</section>`
+    : emptyState("You do not have any playlists yet. Create one from the sidebar.");
+}
+
+function renderArtists() {
+  els.title.textContent = state.currentArtist ? state.currentArtist.name : "Artists";
+
+  if (state.currentArtist) {
+    const artist = state.currentArtist;
+    els.content.innerHTML = `
+      <section class="detail-panel">
+        <div class="detail-header">
+          <img src="${escapeHtml(artist.image_url || "https://via.placeholder.com/400x400?text=Artist")}" alt="${escapeHtml(artist.name)}">
+          <div>
+            <p class="eyebrow">Artist</p>
+            <h3>${escapeHtml(artist.name)}</h3>
+            <p class="muted">${escapeHtml(artist.bio || "No bio available.")}</p>
+            <div class="badge-row">
+              <span class="badge">${escapeHtml(artist.country || "Unknown country")}</span>
+              <span class="badge">${formatNumber(artist.monthly_listeners)} monthly listeners</span>
+              <span class="badge">${formatNumber(artist.followers_count)} followers</span>
+            </div>
+            <div class="actions">
+              <button class="inline-btn" data-action="back-to-artists">Back to artists</button>
+            </div>
+          </div>
+        </div>
+        <div class="song-list">
+          ${artist.songs.map((song) => songCard({ ...song, artist_name: artist.name, artist_id: artist.artist_id }, { source: "artist" })).join("")}
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  els.content.innerHTML = state.artists.length
+    ? `<section class="artist-grid">${state.artists.map((artist) => `
+        <article class="artist-card">
+          <img src="${escapeHtml(artist.image_url || "https://via.placeholder.com/500x500?text=Artist")}" alt="${escapeHtml(artist.name)}">
+          <p class="eyebrow">Artist</p>
+          <h3>${escapeHtml(artist.name)}</h3>
+          <p class="muted">${escapeHtml(artist.bio || "No bio available.")}</p>
+          <div class="badge-row">
+            <span class="badge">${formatNumber(artist.monthly_listeners)} monthly listeners</span>
+            <span class="badge">${artist.songs_count} songs</span>
+          </div>
+          <button data-action="open-artist" data-artist-id="${artist.artist_id}">Open artist page</button>
+        </article>
+      `).join("")}</section>`
+    : emptyState("No artists available.");
+}
+
+function renderView() {
+  syncNav();
+  if (state.view === "home") renderHome();
+  if (state.view === "likes") renderLikes();
+  if (state.view === "playlists") renderPlaylists();
+  if (state.view === "artists") renderArtists();
+}
+
+function mergeSongLike(songId, liked) {
+  state.songs = state.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+  if (state.currentArtist) {
+    state.currentArtist.songs = state.currentArtist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+  }
+  if (state.currentPlaylist) {
+    state.currentPlaylist.songs = state.currentPlaylist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+  }
+}
+
+async function refreshData() {
+  const [songs, likes, playlists, artists] = await Promise.all([
+    getSongs(),
+    getLikes(),
+    getPlaylists(),
+    getArtists()
+  ]);
+
+  state.songs = songs;
+  state.likes = likes.map((song) => ({ ...song, liked: true }));
+  state.playlists = playlists;
+  state.artists = artists;
+}
+
+async function init() {
+  try {
+    setStatus("Loading library…");
+    await refreshData();
+    renderView();
+    setStatus("Ready");
+  } catch (error) {
+    setStatus(error.message);
+    els.content.innerHTML = emptyState(error.message);
+  }
+}
+
+async function playSong(songId, source) {
+  try {
+    setStatus("Loading preview…");
+    const preview = await getSongPreview(songId);
+    if (!preview.preview_url) {
+      throw new Error("No preview available for this song.");
+    }
+
+    els.player.src = preview.preview_url;
+    await els.player.play();
+    els.nowPlayingTitle.textContent = preview.title;
+    els.nowPlayingMeta.textContent = `${preview.artist_name || "Unknown artist"} • 30 second preview`;
+    if (preview.album_cover) {
+      els.nowPlayingCover.src = preview.album_cover;
+      els.nowPlayingCover.classList.remove("hidden");
+    }
+    await registerListen(songId, source || state.view);
+    setStatus("Playing preview");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function toggleLike(songId, liked) {
+  try {
+    setStatus(liked ? "Removing like…" : "Saving like…");
+    if (liked) {
+      await unlikeSong(songId);
+    } else {
+      await likeSong(songId);
+    }
+    mergeSongLike(songId, !liked);
+    state.likes = await getLikes();
+    renderView();
+    setStatus("Saved");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function openArtist(artistId) {
+  try {
+    setStatus("Loading artist…");
+    state.currentArtist = await getArtist(artistId);
+    state.view = "artists";
+    renderView();
+    setStatus("Ready");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function openPlaylist(playlistId) {
+  try {
+    setStatus("Loading playlist…");
+    state.currentPlaylist = await getPlaylist(playlistId);
+    state.view = "playlists";
+    renderView();
+    setStatus("Ready");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function addSelectedSongToPlaylist(songId, playlistId) {
+  if (!playlistId) return;
+  try {
+    setStatus("Adding to playlist…");
+    await addSongToPlaylist(playlistId, songId);
+    state.playlists = await getPlaylists();
+    if (state.currentPlaylist && Number(state.currentPlaylist.playlist_id) === Number(playlistId)) {
+      state.currentPlaylist = await getPlaylist(playlistId);
+    }
+    renderView();
+    setStatus("Song added to playlist");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function removeFromPlaylist(playlistId, songId) {
+  try {
+    setStatus("Removing song…");
+    await removeSongFromPlaylist(playlistId, songId);
+    state.playlists = await getPlaylists();
+    state.currentPlaylist = await getPlaylist(playlistId);
+    renderView();
+    setStatus("Song removed");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+els.navButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.view = button.dataset.view;
+    state.currentArtist = null;
+    state.currentPlaylist = null;
+    renderView();
+    setStatus("Ready");
+  });
+});
+
+els.playlistForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    setStatus("Creating playlist…");
+    await createPlaylist({
+      name: els.playlistName.value,
+      description: els.playlistDescription.value
+    });
+    els.playlistForm.reset();
+    state.playlists = await getPlaylists();
+    if (state.view === "playlists") {
+      renderView();
+    }
+    setStatus("Playlist created");
+  } catch (error) {
+    setStatus(error.message);
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  const target = event.target.closest("[data-action]");
+  if (!target) return;
+
+  const action = target.dataset.action;
+  if (action === "play-song") return playSong(target.dataset.songId, target.dataset.source);
+  if (action === "toggle-like") return toggleLike(Number(target.dataset.songId), target.dataset.liked === "1");
+  if (action === "open-artist") return openArtist(target.dataset.artistId);
+  if (action === "open-playlist") return openPlaylist(target.dataset.playlistId);
+  if (action === "back-to-artists") {
+    state.currentArtist = null;
+    renderView();
+    return;
+  }
+  if (action === "back-to-playlists") {
+    state.currentPlaylist = null;
+    renderView();
+    return;
+  }
+  if (action === "remove-from-playlist") return removeFromPlaylist(target.dataset.playlistId, target.dataset.songId);
+});
+
+document.addEventListener("change", (event) => {
+  const select = event.target.closest("select[data-action='playlist-select']");
+  if (!select) return;
+  addSelectedSongToPlaylist(select.dataset.songId, select.value);
+  select.value = "";
+});
+
+init();
