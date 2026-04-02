@@ -1,12 +1,17 @@
 
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="UTF-8">
+  <title>Musicify</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
 <body>
-<h1>Musicify</h1>
-<input id="q"><button onclick="search()">Search</button>
-<div id="res"></div>
-<div id="songs"></div>
-<audio id="p" controls></audio>
-<script src="app.js"></script>
+  <h1>Musicify</h1>
+  <div id="songs"></div>
+  <audio id="player" controls></audio>
+
+  <script src="./js/api.js"></script>
+  <script src="./js/app.js"></script>
 </body>
 </html>
