@@ -1,17 +1,31 @@
 
-(async function() {
-  const songs = await getSongs();
-  const container = document.getElementById("songs");
-  const player = document.getElementById("player");
+let currentAudio = new Audio();
 
-  songs.forEach(s => {
-    const div = document.createElement("div");
-    div.className = "song";
-    div.innerHTML = `<b>${s.title}</b> <button>Play</button>`;
-    div.querySelector("button").onclick = () => {
-      player.src = s.audio_url || "";
-      player.play();
-    };
-    container.appendChild(div);
+async function search() {
+  const q = document.getElementById('search').value;
+  const res = await fetch(`/api/deezer/search?q=${q}`);
+  const data = await res.json();
+
+  const list = document.getElementById('results');
+  list.innerHTML = '';
+
+  data.forEach(track => {
+    const div = document.createElement('div');
+    div.innerHTML = `
+      ${track.title} - ${track.artist.name}
+      <button onclick="play('${track.preview}')">Play</button>
+      <button onclick="like(${track.id})">❤️</button>
+    `;
+    list.appendChild(div);
   });
-})();
+}
+
+function play(url) {
+  currentAudio.src = url;
+  currentAudio.play();
+}
+
+async function like(id) {
+  await fetch('/api/likes/' + id, { method: 'POST' });
+  alert('Liked!');
+}
