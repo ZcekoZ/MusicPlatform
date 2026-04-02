@@ -1,29 +1,12 @@
 
 <!DOCTYPE html>
 <html>
-<head>
-<meta charset="UTF-8">
-<title>Spotify UI</title>
-<link rel="stylesheet" href="style.css">
-</head>
 <body>
-<div class="sidebar">Musicify</div>
-
-<div class="main">
-<input id="q" placeholder="Search">
-<button onclick="search()">Search</button>
-<div id="grid"></div>
-</div>
-
-<div class="player">
-<img id="cover">
-<div id="info"></div>
-<button onclick="prev()">⏮</button>
-<button onclick="toggle()">⏯</button>
-<button onclick="next()">⏭</button>
-<audio id="audio"></audio>
-</div>
-
+<h1>Musicify</h1>
+<input id="q"><button onclick="search()">Search</button>
+<div id="res"></div>
+<div id="songs"></div>
+<audio id="p" controls></audio>
 <script src="app.js"></script>
 </body>
 </html>
