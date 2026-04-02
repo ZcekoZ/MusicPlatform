@@ -41,3 +41,8 @@ If you want a different API base without changing folder structure, define `wind
 ## Notes
 - The app uses demo user `user_id = 1` for likes, playlists, and listening history.
 - Song playback tries Deezer first, then falls back to the stored `audio_url` if Deezer has no preview match.
+
+
+## Deezer persistence
+
+Search results from Deezer can now be saved into PostgreSQL. The schema adds nullable unique columns for `deezer_artist_id`, `deezer_album_id`, and `deezer_track_id`, so rerun `db/schema.sql` and `db/seed.sql` before starting the updated version.

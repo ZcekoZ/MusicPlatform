@@ -65,20 +65,39 @@ function renderIcons() {
   }
 }
 
+function trackDataset(song) {
+  return `
+    data-song-id="${song.song_id || ""}"
+    data-deezer-id="${song.deezer_id || song.deezer_track_id || ""}"
+    data-title="${escapeHtml(song.title)}"
+    data-artist-name="${escapeHtml(song.artist_name || "Unknown artist")}"
+    data-deezer-artist-id="${song.deezer_artist_id || ""}"
+    data-album-title="${escapeHtml(song.album_title || "")}" 
+    data-deezer-album-id="${song.deezer_album_id || ""}"
+    data-duration-seconds="${song.duration_seconds || 30}"
+    data-plays-count="${song.plays_count || 0}"
+    data-explicit="${song.explicit ? "1" : "0"}"
+    data-cover-url="${escapeHtml(song.cover_url || song.album_cover || "")}" 
+    data-preview-url="${escapeHtml(song.preview_url || song.audio_url || "")}"
+    data-deezer-link="${escapeHtml(song.deezer_link || "")}" 
+    data-imported="${song.song_id ? "1" : "0"}"
+  `;
+}
+
 function songCard(song, options = {}) {
   const playlistOptions = state.playlists.length
     ? state.playlists.map((playlist) => `<option value="${playlist.playlist_id}">${escapeHtml(playlist.name)}</option>`).join("")
     : "";
 
-  const isRemote = song.source === "deezer";
-  const likeButton = isRemote ? "" : `
+  const imported = Boolean(song.song_id);
+  const likeButton = `
     <button
       class="icon-btn ${song.liked ? "liked" : ""}"
       data-action="toggle-like"
-      data-song-id="${song.song_id}"
+      ${trackDataset(song)}
       data-liked="${song.liked ? "1" : "0"}"
-      aria-label="${song.liked ? "Unlike" : "Like"} ${escapeHtml(song.title)}"
-      title="${song.liked ? "Unlike" : "Like"}"
+      aria-label="${song.liked ? "Unlike" : imported ? "Like" : "Save and like"} ${escapeHtml(song.title)}"
+      title="${song.liked ? "Unlike" : imported ? "Like" : "Save and like"}"
     >
       <i data-lucide="heart"></i>
     </button>
@@ -94,16 +113,17 @@ function songCard(song, options = {}) {
           <span class="badge">${formatDuration(song.duration_seconds)}</span>
           <span class="badge">${formatNumber(song.plays_count)} plays</span>
           ${song.explicit ? '<span class="badge">Explicit</span>' : ""}
-          ${isRemote ? '<span class="badge">Deezer search</span>' : ""}
+          ${song.source === "deezer" ? `<span class="badge">${imported ? "Saved to library" : "Deezer result"}</span>` : ""}
         </div>
       </div>
       <div class="song-actions">
-        <button class="primary-btn" data-action="play-song" data-song-id="${song.song_id || ""}" data-source="${escapeHtml(options.source || state.view)}" data-preview-url="${escapeHtml(song.preview_url || "")}" data-title="${escapeHtml(song.title)}" data-artist-name="${escapeHtml(song.artist_name || "")}" data-cover-url="${escapeHtml(song.cover_url || song.album_cover || "")}">Play preview</button>
+        <button class="primary-btn" data-action="play-song" ${trackDataset(song)} data-source="${escapeHtml(options.source || state.view)}">Play preview</button>
         ${likeButton}
-        ${song.artist_id ? `<button data-action="open-artist" data-artist-id="${song.artist_id}">Artist page</button>` : ""}
-        ${state.playlists.length && !isRemote ? `
-          <select data-action="playlist-select" data-song-id="${song.song_id}">
-            <option value="">Add to playlist…</option>
+        ${song.artist_id ? `<button data-action="open-artist" data-artist-id="${song.artist_id}">Artist page</button>` : `<button data-action="save-and-open-artist" ${trackDataset(song)}>Save artist page</button>`}
+        ${song.song_id ? "" : `<button data-action="import-track" ${trackDataset(song)}>Save to library</button>`}
+        ${state.playlists.length ? `
+          <select data-action="playlist-select" ${trackDataset(song)}>
+            <option value="">${song.song_id ? "Add to playlist…" : "Save + add to playlist…"}</option>
             ${playlistOptions}
           </select>
         ` : ""}
@@ -126,7 +146,7 @@ function renderHome() {
       </section>
       <section class="panel">
         <p class="eyebrow">Deezer results</p>
-        <p class="search-results-note muted">These are live 30-second previews from Deezer. They can be played instantly, but they are not stored in your database unless you build an import flow later.</p>
+        <p class="search-results-note muted">Search results can now be saved directly into your database, then liked and added to playlists persistently.</p>
         ${state.searchResults.length ? `<div class="song-list">${state.searchResults.map((song) => songCard(song, { source: "search" })).join("")}</div>` : emptyState("No Deezer preview results found.")}
       </section>
     `
@@ -259,12 +279,54 @@ function renderView() {
 
 function mergeSongLike(songId, liked) {
   state.songs = state.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+  state.searchResults = state.searchResults.map((song) => song.song_id === songId ? { ...song, liked, imported: true } : song);
   if (state.currentArtist) {
     state.currentArtist.songs = state.currentArtist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
   }
   if (state.currentPlaylist) {
     state.currentPlaylist.songs = state.currentPlaylist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
   }
+}
+
+function mergeImportedSong(importedSong, trackDeezerId) {
+  state.songs = state.songs.some((song) => Number(song.song_id) === Number(importedSong.song_id))
+    ? state.songs.map((song) => Number(song.song_id) === Number(importedSong.song_id) ? { ...song, ...importedSong } : song)
+    : [importedSong, ...state.songs];
+
+  state.searchResults = state.searchResults.map((song) => {
+    const sameTrack = Number(song.deezer_id || song.deezer_track_id || 0) === Number(trackDeezerId || importedSong.deezer_track_id || 0);
+    return sameTrack ? { ...song, ...importedSong, source: "deezer", imported: true, deezer_id: song.deezer_id || importedSong.deezer_track_id } : song;
+  });
+}
+
+function trackFromElement(element) {
+  return {
+    song_id: element.dataset.songId ? Number(element.dataset.songId) : null,
+    deezer_id: element.dataset.deezerId ? Number(element.dataset.deezerId) : null,
+    title: element.dataset.title || "",
+    artist_name: element.dataset.artistName || "Unknown artist",
+    deezer_artist_id: element.dataset.deezerArtistId ? Number(element.dataset.deezerArtistId) : null,
+    album_title: element.dataset.albumTitle || null,
+    deezer_album_id: element.dataset.deezerAlbumId ? Number(element.dataset.deezerAlbumId) : null,
+    duration_seconds: element.dataset.durationSeconds ? Number(element.dataset.durationSeconds) : 30,
+    plays_count: element.dataset.playsCount ? Number(element.dataset.playsCount) : 0,
+    explicit: element.dataset.explicit === "1",
+    cover_url: element.dataset.coverUrl || null,
+    preview_url: element.dataset.previewUrl || null,
+    deezer_link: element.dataset.deezerLink || null
+  };
+}
+
+async function ensureImportedFromElement(element) {
+  const track = trackFromElement(element);
+  if (track.song_id) {
+    return track.song_id;
+  }
+
+  setStatus("Saving song to library…");
+  const importedSong = await importTrack(track);
+  mergeImportedSong(importedSong, track.deezer_id);
+  return importedSong.song_id;
 }
 
 async function refreshData() {
@@ -364,8 +426,10 @@ async function playSong(songId, source, target) {
   }
 }
 
-async function toggleLike(songId, liked) {
+async function toggleLikeFromElement(element) {
   try {
+    const liked = element.dataset.liked === "1";
+    const songId = await ensureImportedFromElement(element);
     setStatus(liked ? "Removing like…" : "Saving like…");
     if (liked) {
       await unlikeSong(songId);
@@ -405,9 +469,10 @@ async function openPlaylist(playlistId) {
   }
 }
 
-async function addSelectedSongToPlaylist(songId, playlistId) {
+async function addSelectedSongToPlaylistFromElement(element, playlistId) {
   if (!playlistId) return;
   try {
+    const songId = await ensureImportedFromElement(element);
     setStatus("Adding to playlist…");
     await addSongToPlaylist(playlistId, songId);
     state.playlists = await getPlaylists();
@@ -429,6 +494,33 @@ async function removeFromPlaylist(playlistId, songId) {
     state.currentPlaylist = await getPlaylist(playlistId);
     renderView();
     setStatus("Song removed");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function saveTrackFromElement(element) {
+  try {
+    await ensureImportedFromElement(element);
+    state.artists = await getArtists();
+    renderView();
+    setStatus("Saved to library");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function saveAndOpenArtistFromElement(element) {
+  try {
+    const songId = await ensureImportedFromElement(element);
+    const importedSong = state.songs.find((song) => Number(song.song_id) === Number(songId));
+    state.artists = await getArtists();
+    renderView();
+    if (importedSong?.artist_id) {
+      await openArtist(importedSong.artist_id);
+    } else {
+      setStatus("Artist was saved, but the artist page is not available yet.");
+    }
   } catch (error) {
     setStatus(error.message);
   }
@@ -473,8 +565,10 @@ document.addEventListener("click", async (event) => {
 
   const action = target.dataset.action;
   if (action === "play-song") return playSong(target.dataset.songId, target.dataset.source, target);
-  if (action === "toggle-like") return toggleLike(Number(target.dataset.songId), target.dataset.liked === "1");
+  if (action === "toggle-like") return toggleLikeFromElement(target);
   if (action === "open-artist") return openArtist(target.dataset.artistId);
+  if (action === "save-and-open-artist") return saveAndOpenArtistFromElement(target);
+  if (action === "import-track") return saveTrackFromElement(target);
   if (action === "open-playlist") return openPlaylist(target.dataset.playlistId);
   if (action === "back-to-artists") {
     state.currentArtist = null;
@@ -492,7 +586,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("change", (event) => {
   const select = event.target.closest("select[data-action='playlist-select']");
   if (!select) return;
-  addSelectedSongToPlaylist(select.dataset.songId, select.value);
+  addSelectedSongToPlaylistFromElement(select, select.value);
   select.value = "";
 });
 

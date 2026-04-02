@@ -29,6 +29,13 @@ function searchTracks(query) {
   return request(`/search?q=${encodeURIComponent(query)}`);
 }
 
+function importTrack(track) {
+  return request("/import-track", {
+    method: "POST",
+    body: JSON.stringify(track)
+  });
+}
+
 function getSongPreview(songId) {
   return request(`/songs/${songId}/preview`);
 }

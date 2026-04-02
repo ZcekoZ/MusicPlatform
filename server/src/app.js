@@ -16,14 +16,17 @@ async function query(text, params = []) {
   return pool.query(text, params);
 }
 
-async function getDeezerPreview(title, artistName) {
-  const q = encodeURIComponent(`${title} ${artistName}`.trim());
-  const response = await fetch(`https://api.deezer.com/search?q=${q}`);
+async function getDeezerJson(url) {
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Deezer request failed with status ${response.status}`);
   }
+  return response.json();
+}
 
-  const payload = await response.json();
+async function getDeezerPreview(title, artistName) {
+  const q = encodeURIComponent(`${title} ${artistName}`.trim());
+  const payload = await getDeezerJson(`https://api.deezer.com/search?q=${q}`);
   const exactish = (payload.data || []).find((track) => {
     const trackTitle = String(track.title || "").toLowerCase();
     const trackArtist = String(track.artist?.name || "").toLowerCase();
@@ -32,6 +35,240 @@ async function getDeezerPreview(title, artistName) {
 
   const fallback = (payload.data || []).find((track) => track.preview);
   return exactish || fallback || null;
+}
+
+async function normalizeSearchResults(tracks) {
+  const deezerIds = tracks.map((track) => Number(track.id)).filter(Boolean);
+  const importedMap = new Map();
+
+  if (deezerIds.length) {
+    const imported = await query(
+      `SELECT
+        s.song_id,
+        s.deezer_track_id,
+        s.title,
+        ar.artist_id,
+        ar.name AS artist_name,
+        EXISTS (
+          SELECT 1 FROM liked_songs ls
+          WHERE ls.song_id = s.song_id AND ls.user_id = $2
+        ) AS liked
+      FROM songs s
+      LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
+      LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
+      WHERE s.deezer_track_id = ANY($1::bigint[])`,
+      [deezerIds, DEMO_USER_ID]
+    );
+
+    imported.rows.forEach((row) => {
+      importedMap.set(Number(row.deezer_track_id), row);
+    });
+  }
+
+  return tracks
+    .filter((track) => track.preview)
+    .slice(0, 20)
+    .map((track) => {
+      const imported = importedMap.get(Number(track.id));
+      return {
+        source: "deezer",
+        deezer_id: track.id,
+        song_id: imported?.song_id || null,
+        title: track.title,
+        artist_name: track.artist?.name || "Unknown artist",
+        artist_id: imported?.artist_id || null,
+        deezer_artist_id: track.artist?.id || null,
+        album_title: track.album?.title || null,
+        deezer_album_id: track.album?.id || null,
+        duration_seconds: track.duration || 30,
+        plays_count: track.rank || 0,
+        explicit: Boolean(track.explicit_lyrics),
+        cover_url: track.album?.cover_medium || track.album?.cover || null,
+        preview_url: track.preview,
+        deezer_link: track.link || null,
+        liked: Boolean(imported?.liked),
+        imported: Boolean(imported)
+      };
+    });
+}
+
+async function importTrackToLibrary(trackInput) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const deezerTrackId = Number(trackInput.deezer_id || trackInput.id || 0) || null;
+    const deezerArtistId = Number(trackInput.deezer_artist_id || trackInput.artist?.id || 0) || null;
+    const deezerAlbumId = Number(trackInput.deezer_album_id || trackInput.album?.id || 0) || null;
+    const artistName = String(trackInput.artist_name || trackInput.artist?.name || "Unknown artist").trim() || "Unknown artist";
+    const albumTitle = String(trackInput.album_title || trackInput.album?.title || "Singles").trim() || "Singles";
+    const title = String(trackInput.title || "Untitled track").trim() || "Untitled track";
+    const previewUrl = String(trackInput.preview_url || trackInput.preview || "").trim() || null;
+    const coverUrl = String(trackInput.cover_url || trackInput.album?.cover_medium || trackInput.album?.cover || "").trim() || null;
+    const deezerLink = String(trackInput.deezer_link || trackInput.link || "").trim() || null;
+    const durationSeconds = Math.max(1, Number(trackInput.duration_seconds || trackInput.duration || 30) || 30);
+    const explicit = Boolean(trackInput.explicit);
+
+    let existingSong = null;
+    if (deezerTrackId) {
+      const existingResult = await client.query(
+        `SELECT s.song_id
+         FROM songs s
+         WHERE s.deezer_track_id = $1`,
+        [deezerTrackId]
+      );
+      existingSong = existingResult.rows[0] || null;
+    }
+
+    let artistId = null;
+    if (deezerArtistId) {
+      const artistResult = await client.query(
+        `INSERT INTO artists (deezer_artist_id, name, image_url)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (deezer_artist_id)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           image_url = COALESCE(EXCLUDED.image_url, artists.image_url)
+         RETURNING artist_id`,
+        [deezerArtistId, artistName, coverUrl]
+      );
+      artistId = artistResult.rows[0].artist_id;
+    } else {
+      const artistLookup = await client.query(
+        `SELECT artist_id
+         FROM artists
+         WHERE LOWER(name) = LOWER($1)
+         LIMIT 1`,
+        [artistName]
+      );
+
+      if (artistLookup.rows.length) {
+        artistId = artistLookup.rows[0].artist_id;
+      } else {
+        const artistInsert = await client.query(
+          `INSERT INTO artists (name, image_url)
+           VALUES ($1, $2)
+           RETURNING artist_id`,
+          [artistName, coverUrl]
+        );
+        artistId = artistInsert.rows[0].artist_id;
+      }
+    }
+
+    let albumId = null;
+    if (deezerAlbumId) {
+      const albumResult = await client.query(
+        `INSERT INTO albums (deezer_album_id, title, cover_url, artist_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (deezer_album_id)
+         DO UPDATE SET
+           title = EXCLUDED.title,
+           cover_url = COALESCE(EXCLUDED.cover_url, albums.cover_url),
+           artist_id = EXCLUDED.artist_id
+         RETURNING album_id`,
+        [deezerAlbumId, albumTitle, coverUrl, artistId]
+      );
+      albumId = albumResult.rows[0].album_id;
+    } else {
+      const albumLookup = await client.query(
+        `SELECT album_id
+         FROM albums
+         WHERE artist_id = $1 AND LOWER(title) = LOWER($2)
+         LIMIT 1`,
+        [artistId, albumTitle]
+      );
+
+      if (albumLookup.rows.length) {
+        albumId = albumLookup.rows[0].album_id;
+      } else {
+        const albumInsert = await client.query(
+          `INSERT INTO albums (title, cover_url, artist_id)
+           VALUES ($1, $2, $3)
+           RETURNING album_id`,
+          [albumTitle, coverUrl, artistId]
+        );
+        albumId = albumInsert.rows[0].album_id;
+      }
+    }
+
+    let songId = existingSong?.song_id || null;
+    if (songId) {
+      await client.query(
+        `UPDATE songs
+         SET title = $2,
+             duration_seconds = $3,
+             album_id = $4,
+             audio_url = COALESCE($5, audio_url),
+             cover_url = COALESCE($6, cover_url),
+             explicit = $7,
+             deezer_link = COALESCE($8, deezer_link)
+         WHERE song_id = $1`,
+        [songId, title, durationSeconds, albumId, previewUrl, coverUrl, explicit, deezerLink]
+      );
+    } else {
+      const songInsert = await client.query(
+        `INSERT INTO songs (
+           title,
+           duration_seconds,
+           album_id,
+           audio_url,
+           cover_url,
+           explicit,
+           deezer_track_id,
+           deezer_link
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING song_id`,
+        [title, durationSeconds, albumId, previewUrl, coverUrl, explicit, deezerTrackId, deezerLink]
+      );
+      songId = songInsert.rows[0].song_id;
+    }
+
+    await client.query(
+      `INSERT INTO song_artists (song_id, artist_id, is_primary)
+       VALUES ($1, $2, TRUE)
+       ON CONFLICT (song_id, artist_id)
+       DO UPDATE SET is_primary = TRUE`,
+      [songId, artistId]
+    );
+
+    await client.query("COMMIT");
+
+    const importedSong = await query(
+      `SELECT
+        s.song_id,
+        s.title,
+        s.duration_seconds,
+        s.cover_url,
+        s.explicit,
+        s.plays_count,
+        s.audio_url,
+        s.deezer_track_id,
+        a.album_id,
+        a.title AS album_title,
+        ar.artist_id,
+        ar.name AS artist_name,
+        ar.image_url AS artist_image,
+        EXISTS (
+          SELECT 1 FROM liked_songs ls
+          WHERE ls.song_id = s.song_id AND ls.user_id = $2
+        ) AS liked
+      FROM songs s
+      LEFT JOIN albums a ON a.album_id = s.album_id
+      LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
+      LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
+      WHERE s.song_id = $1`,
+      [songId, DEMO_USER_ID]
+    );
+
+    return importedSong.rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 app.get("/", (req, res) => {
@@ -62,6 +299,7 @@ app.get("/api/songs", async (req, res) => {
         s.explicit,
         s.plays_count,
         s.audio_url,
+        s.deezer_track_id,
         a.album_id,
         a.title AS album_title,
         ar.artist_id,
@@ -98,33 +336,23 @@ app.get("/api/search", async (req, res) => {
       return res.json([]);
     }
 
-    const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}`);
-    if (!response.ok) {
-      throw new Error(`Deezer request failed with status ${response.status}`);
+    const payload = await getDeezerJson(`https://api.deezer.com/search?q=${encodeURIComponent(q)}`);
+    const results = await normalizeSearchResults(payload.data || []);
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/import-track", async (req, res) => {
+  try {
+    const track = req.body || {};
+    if (!track.title || !(track.preview_url || track.preview)) {
+      return res.status(400).json({ error: "Track title and preview URL are required" });
     }
 
-    const payload = await response.json();
-    const results = (payload.data || [])
-      .filter((track) => track.preview)
-      .slice(0, 20)
-      .map((track) => ({
-        source: "deezer",
-        deezer_id: track.id,
-        song_id: null,
-        title: track.title,
-        artist_name: track.artist?.name || "Unknown artist",
-        album_title: track.album?.title || null,
-        duration_seconds: track.duration || 30,
-        plays_count: track.rank || 0,
-        explicit: Boolean(track.explicit_lyrics),
-        cover_url: track.album?.cover_medium || track.album?.cover || null,
-        preview_url: track.preview,
-        deezer_link: track.link || null,
-        liked: false,
-        artist_id: null
-      }));
-
-    res.json(results);
+    const importedSong = await importTrackToLibrary(track);
+    res.status(201).json(importedSong);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -346,7 +574,7 @@ app.post("/api/playlists", async (req, res) => {
 app.get("/api/playlists/:playlistId", async (req, res) => {
   try {
     const playlistResult = await query(
-      `SELECT playlist_id, name, description, created_at
+      `SELECT playlist_id, name, description, cover_url, created_at
        FROM playlists
        WHERE playlist_id = $1 AND user_id = $2`,
       [req.params.playlistId, DEMO_USER_ID]
@@ -363,9 +591,9 @@ app.get("/api/playlists/:playlistId", async (req, res) => {
         s.duration_seconds,
         s.cover_url,
         s.plays_count,
-        ps.position,
         ar.artist_id,
         ar.name AS artist_name,
+        ps.position,
         EXISTS (
           SELECT 1 FROM liked_songs ls
           WHERE ls.song_id = s.song_id AND ls.user_id = $2
@@ -387,17 +615,18 @@ app.get("/api/playlists/:playlistId", async (req, res) => {
 
 app.post("/api/playlists/:playlistId/songs", async (req, res) => {
   const { songId } = req.body;
+
   if (!songId) {
     return res.status(400).json({ error: "songId is required" });
   }
 
   try {
-    const playlistResult = await query(
+    const playlistCheck = await query(
       `SELECT playlist_id FROM playlists WHERE playlist_id = $1 AND user_id = $2`,
       [req.params.playlistId, DEMO_USER_ID]
     );
 
-    if (!playlistResult.rows.length) {
+    if (!playlistCheck.rows.length) {
       return res.status(404).json({ error: "Playlist not found" });
     }
 
@@ -425,26 +654,8 @@ app.delete("/api/playlists/:playlistId/songs/:songId", async (req, res) => {
   try {
     await query(
       `DELETE FROM playlist_songs
-       WHERE playlist_id = $1
-         AND song_id = $2
-         AND EXISTS (
-           SELECT 1 FROM playlists p
-           WHERE p.playlist_id = $1 AND p.user_id = $3
-         )`,
-      [req.params.playlistId, req.params.songId, DEMO_USER_ID]
-    );
-
-    await query(
-      `WITH ordered AS (
-         SELECT song_id, ROW_NUMBER() OVER (ORDER BY position ASC) AS new_position
-         FROM playlist_songs
-         WHERE playlist_id = $1
-       )
-       UPDATE playlist_songs ps
-       SET position = ordered.new_position
-       FROM ordered
-       WHERE ps.playlist_id = $1 AND ps.song_id = ordered.song_id`,
-      [req.params.playlistId]
+       WHERE playlist_id = $1 AND song_id = $2`,
+      [req.params.playlistId, req.params.songId]
     );
 
     res.json({ ok: true });
@@ -458,7 +669,7 @@ app.post("/api/listens/:songId", async (req, res) => {
     await query(
       `INSERT INTO listening_history (user_id, song_id, source)
        VALUES ($1, $2, $3)`,
-      [DEMO_USER_ID, req.params.songId, req.body.source || "player"]
+      [DEMO_USER_ID, req.params.songId, String(req.body.source || "player")]
     );
 
     res.status(201).json({ ok: true });
@@ -467,9 +678,6 @@ app.post("/api/listens/:songId", async (req, res) => {
   }
 });
 
-app.use((error, req, res, next) => {
-  console.error(error);
-  res.status(500).json({ error: "Unexpected server error" });
+app.listen(PORT, () => {
+  console.log(`Music Platform API listening on port ${PORT}`);
 });
-
-app.listen(PORT, () => console.log("Server running on port " + PORT));

@@ -31,6 +31,7 @@ CREATE TABLE users (
 -- ARTISTS
 CREATE TABLE artists (
     artist_id SERIAL PRIMARY KEY,
+    deezer_artist_id BIGINT UNIQUE,
     name VARCHAR(100) NOT NULL,
     country VARCHAR(50),
     image_url TEXT,
@@ -42,6 +43,7 @@ CREATE TABLE artists (
 -- ALBUMS
 CREATE TABLE albums (
     album_id SERIAL PRIMARY KEY,
+    deezer_album_id BIGINT UNIQUE,
     title VARCHAR(150) NOT NULL,
     release_date DATE,
     cover_url TEXT,
@@ -52,6 +54,7 @@ CREATE TABLE albums (
 -- SONGS
 CREATE TABLE songs (
     song_id SERIAL PRIMARY KEY,
+    deezer_track_id BIGINT UNIQUE,
     title VARCHAR(150) NOT NULL,
     duration_seconds INT NOT NULL CHECK (duration_seconds > 0),
     plays_count INT DEFAULT 0,
@@ -60,6 +63,7 @@ CREATE TABLE songs (
     cover_url TEXT,
     lyrics TEXT,
     explicit BOOLEAN DEFAULT FALSE,
+    deezer_link TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -142,6 +146,7 @@ CREATE TABLE listening_history (
 
 -- INDEXES
 CREATE INDEX idx_songs_title ON songs(title);
+CREATE INDEX idx_songs_deezer_track_id ON songs(deezer_track_id);
 CREATE INDEX idx_artists_name ON artists(name);
 CREATE INDEX idx_albums_title ON albums(title);
 CREATE INDEX idx_listening_history_user ON listening_history(user_id);
