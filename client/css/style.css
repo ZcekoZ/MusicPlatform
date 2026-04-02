@@ -259,3 +259,44 @@ body { padding-bottom: 110px; }
 .search-results-note {
   margin: 0 0 14px;
 }
+
+.auth-card,
+.user-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-form input,
+.auth-form textarea {
+  width: 100%;
+}
+
+.auth-hint {
+  margin: 0;
+  font-size: 13px;
+}
+
+.user-panel h3 {
+  margin: 0;
+}
+
+.auth-empty-panel {
+  min-height: 240px;
+  align-content: center;
+}

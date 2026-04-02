@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS song_genres CASCADE;
 DROP TABLE IF EXISTS song_artists CASCADE;
 DROP TABLE IF EXISTS artist_followers CASCADE;
 DROP TABLE IF EXISTS user_follows CASCADE;
+DROP TABLE IF EXISTS user_sessions CASCADE;
 DROP TABLE IF EXISTS playlists CASCADE;
 DROP TABLE IF EXISTS songs CASCADE;
 DROP TABLE IF EXISTS albums CASCADE;
@@ -14,7 +15,6 @@ DROP TABLE IF EXISTS users CASCADE;
 
 DROP VIEW IF EXISTS top_songs;
 
--- USERS
 CREATE TABLE users (
     user_id SERIAL PRIMARY KEY,
     username VARCHAR(50) NOT NULL UNIQUE,
@@ -28,7 +28,14 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ARTISTS
+CREATE TABLE user_sessions (
+    session_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    session_token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE artists (
     artist_id SERIAL PRIMARY KEY,
     deezer_artist_id BIGINT UNIQUE,
@@ -40,7 +47,6 @@ CREATE TABLE artists (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ALBUMS
 CREATE TABLE albums (
     album_id SERIAL PRIMARY KEY,
     deezer_album_id BIGINT UNIQUE,
@@ -51,7 +57,6 @@ CREATE TABLE albums (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- SONGS
 CREATE TABLE songs (
     song_id SERIAL PRIMARY KEY,
     deezer_track_id BIGINT UNIQUE,
@@ -67,7 +72,6 @@ CREATE TABLE songs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- SONG_ARTISTS
 CREATE TABLE song_artists (
     song_id INT REFERENCES songs(song_id) ON DELETE CASCADE,
     artist_id INT REFERENCES artists(artist_id) ON DELETE CASCADE,
@@ -75,7 +79,6 @@ CREATE TABLE song_artists (
     PRIMARY KEY (song_id, artist_id)
 );
 
--- PLAYLISTS
 CREATE TABLE playlists (
     playlist_id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -87,7 +90,6 @@ CREATE TABLE playlists (
     user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
 );
 
--- PLAYLIST_SONGS
 CREATE TABLE playlist_songs (
     playlist_id INT REFERENCES playlists(playlist_id) ON DELETE CASCADE,
     song_id INT REFERENCES songs(song_id) ON DELETE CASCADE,
@@ -97,20 +99,17 @@ CREATE TABLE playlist_songs (
     UNIQUE (playlist_id, position)
 );
 
--- GENRES
 CREATE TABLE genres (
     genre_id SERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE
 );
 
--- SONG_GENRES
 CREATE TABLE song_genres (
     song_id INT REFERENCES songs(song_id) ON DELETE CASCADE,
     genre_id INT REFERENCES genres(genre_id) ON DELETE CASCADE,
     PRIMARY KEY (song_id, genre_id)
 );
 
--- ARTIST_FOLLOWERS
 CREATE TABLE artist_followers (
     user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
     artist_id INT REFERENCES artists(artist_id) ON DELETE CASCADE,
@@ -118,7 +117,6 @@ CREATE TABLE artist_followers (
     PRIMARY KEY (user_id, artist_id)
 );
 
--- USER_FOLLOWS
 CREATE TABLE user_follows (
     follower_id INT REFERENCES users(user_id) ON DELETE CASCADE,
     following_id INT REFERENCES users(user_id) ON DELETE CASCADE,
@@ -127,7 +125,6 @@ CREATE TABLE user_follows (
     CHECK (follower_id <> following_id)
 );
 
--- LIKED SONGS
 CREATE TABLE liked_songs (
     user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
     song_id INT REFERENCES songs(song_id) ON DELETE CASCADE,
@@ -135,7 +132,6 @@ CREATE TABLE liked_songs (
     PRIMARY KEY (user_id, song_id)
 );
 
--- LISTENING HISTORY
 CREATE TABLE listening_history (
     history_id SERIAL PRIMARY KEY,
     user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
@@ -144,7 +140,10 @@ CREATE TABLE listening_history (
     source VARCHAR(50) DEFAULT 'player'
 );
 
--- INDEXES
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_user_sessions_user ON user_sessions(user_id);
+CREATE INDEX idx_user_sessions_expires ON user_sessions(expires_at);
 CREATE INDEX idx_songs_title ON songs(title);
 CREATE INDEX idx_songs_deezer_track_id ON songs(deezer_track_id);
 CREATE INDEX idx_artists_name ON artists(name);
@@ -152,7 +151,6 @@ CREATE INDEX idx_albums_title ON albums(title);
 CREATE INDEX idx_listening_history_user ON listening_history(user_id);
 CREATE INDEX idx_playlist_songs_playlist ON playlist_songs(playlist_id);
 
--- TRIGGER FUNCTION
 CREATE OR REPLACE FUNCTION increment_song_play_count()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -169,7 +167,6 @@ AFTER INSERT ON listening_history
 FOR EACH ROW
 EXECUTE FUNCTION increment_song_play_count();
 
--- VIEW
 CREATE VIEW top_songs AS
 SELECT
     s.song_id,

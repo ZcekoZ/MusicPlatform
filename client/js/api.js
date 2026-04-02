@@ -1,9 +1,35 @@
 const API_BASE = window.API_BASE || "https://musicplatformserver.onrender.com/api";
+const TOKEN_KEY = "musicify_session_token";
+
+function getAuthToken() {
+  return window.localStorage.getItem(TOKEN_KEY) || "";
+}
+
+function setAuthToken(token) {
+  if (token) {
+    window.localStorage.setItem(TOKEN_KEY, token);
+  }
+}
+
+function clearAuthToken() {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
 
 async function request(path, options = {}) {
+  const token = getAuthToken();
+  const headers = { ...(options.headers || {}) };
+
+  if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(API_BASE + path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options
+    ...options,
+    headers
   });
 
   if (!response.ok) {
@@ -14,10 +40,31 @@ async function request(path, options = {}) {
     } catch (error) {
       // ignore parsing failure
     }
+
+    if (response.status === 401) {
+      clearAuthToken();
+    }
+
     throw new Error(message);
   }
 
   return response.json();
+}
+
+function loginUser(body) {
+  return request("/auth/login", { method: "POST", body: JSON.stringify(body) });
+}
+
+function registerUser(body) {
+  return request("/auth/register", { method: "POST", body: JSON.stringify(body) });
+}
+
+function getCurrentUser() {
+  return request("/auth/me");
+}
+
+function logoutUser() {
+  return request("/auth/logout", { method: "POST" });
 }
 
 function getSongs(query = "") {

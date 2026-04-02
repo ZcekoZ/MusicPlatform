@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const pool = require("./db");
@@ -7,13 +8,81 @@ const pool = require("./db");
 const app = express();
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "*";
-const DEMO_USER_ID = 1;
+const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 30);
 
 app.use(cors({ origin: CLIENT_URL === "*" ? true : CLIENT_URL }));
 app.use(express.json());
 
 async function query(text, params = []) {
   return pool.query(text, params);
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derived = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${derived}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (!storedHash || !String(storedHash).startsWith("scrypt$")) {
+    return false;
+  }
+
+  const [, salt, expectedHash] = String(storedHash).split("$");
+  if (!salt || !expectedHash) {
+    return false;
+  }
+
+  const actualHash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
+}
+
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function hashSessionToken(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function sanitizeUser(row) {
+  return {
+    user_id: row.user_id,
+    username: row.username,
+    display_name: row.display_name,
+    email: row.email,
+    avatar_url: row.avatar_url,
+    bio: row.bio,
+    is_premium: row.is_premium,
+    created_at: row.created_at
+  };
+}
+
+function getSessionExpiryDate() {
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + SESSION_TTL_DAYS);
+  return expiresAt;
+}
+
+async function createSession(userId) {
+  const token = generateSessionToken();
+  const tokenHash = hashSessionToken(token);
+  const expiresAt = getSessionExpiryDate();
+
+  await query(
+    `INSERT INTO user_sessions (user_id, session_token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
+    [userId, tokenHash, expiresAt]
+  );
+
+  return {
+    token,
+    expires_at: expiresAt.toISOString()
+  };
 }
 
 async function getDeezerJson(url) {
@@ -37,7 +106,7 @@ async function getDeezerPreview(title, artistName) {
   return exactish || fallback || null;
 }
 
-async function normalizeSearchResults(tracks) {
+async function normalizeSearchResults(tracks, userId) {
   const deezerIds = tracks.map((track) => Number(track.id)).filter(Boolean);
   const importedMap = new Map();
 
@@ -57,7 +126,7 @@ async function normalizeSearchResults(tracks) {
       LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
       LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
       WHERE s.deezer_track_id = ANY($1::bigint[])`,
-      [deezerIds, DEMO_USER_ID]
+      [deezerIds, userId]
     );
 
     imported.rows.forEach((row) => {
@@ -92,7 +161,7 @@ async function normalizeSearchResults(tracks) {
     });
 }
 
-async function importTrackToLibrary(trackInput) {
+async function importTrackToLibrary(trackInput, userId) {
   const client = await pool.connect();
 
   try {
@@ -238,18 +307,18 @@ async function importTrackToLibrary(trackInput) {
     const importedSong = await query(
       `SELECT
         s.song_id,
+        s.deezer_track_id,
         s.title,
         s.duration_seconds,
         s.cover_url,
         s.explicit,
         s.plays_count,
         s.audio_url,
-        s.deezer_track_id,
+        s.deezer_link,
         a.album_id,
         a.title AS album_title,
         ar.artist_id,
         ar.name AS artist_name,
-        ar.image_url AS artist_image,
         EXISTS (
           SELECT 1 FROM liked_songs ls
           WHERE ls.song_id = s.song_id AND ls.user_id = $2
@@ -259,7 +328,7 @@ async function importTrackToLibrary(trackInput) {
       LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
       LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
       WHERE s.song_id = $1`,
-      [songId, DEMO_USER_ID]
+      [songId, userId]
     );
 
     return importedSong.rows[0];
@@ -268,6 +337,50 @@ async function importTrackToLibrary(trackInput) {
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const tokenHash = hashSessionToken(token);
+    const result = await query(
+      `SELECT
+        us.session_id,
+        us.user_id,
+        us.expires_at,
+        u.username,
+        u.display_name,
+        u.email,
+        u.avatar_url,
+        u.bio,
+        u.is_premium,
+        u.created_at
+      FROM user_sessions us
+      INNER JOIN users u ON u.user_id = us.user_id
+      WHERE us.session_token_hash = $1
+        AND us.expires_at > NOW()`,
+      [tokenHash]
+    );
+
+    if (!result.rows.length) {
+      return res.status(401).json({ error: "Session expired or invalid" });
+    }
+
+    req.session = {
+      session_id: result.rows[0].session_id,
+      expires_at: result.rows[0].expires_at
+    };
+    req.user = sanitizeUser(result.rows[0]);
+    next();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 }
 
@@ -284,11 +397,93 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const username = String(req.body.username || "").trim();
+    const displayName = String(req.body.displayName || req.body.display_name || "").trim() || username;
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || "");
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: "Username, email, and password are required" });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    const existing = await query(
+      `SELECT user_id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2) LIMIT 1`,
+      [username, email]
+    );
+
+    if (existing.rows.length) {
+      return res.status(409).json({ error: "Username or email already exists" });
+    }
+
+    const result = await query(
+      `INSERT INTO users (username, display_name, email, password_hash)
+       VALUES ($1, $2, $3, $4)
+       RETURNING user_id, username, display_name, email, avatar_url, bio, is_premium, created_at`,
+      [username, displayName, email, hashPassword(password)]
+    );
+
+    const user = sanitizeUser(result.rows[0]);
+    const session = await createSession(user.user_id);
+    res.status(201).json({ user, token: session.token, expires_at: session.expires_at });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const identifier = String(req.body.identifier || req.body.email || req.body.username || "").trim();
+    const password = String(req.body.password || "");
+
+    if (!identifier || !password) {
+      return res.status(400).json({ error: "Identifier and password are required" });
+    }
+
+    const result = await query(
+      `SELECT *
+       FROM users
+       WHERE LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)
+       LIMIT 1`,
+      [identifier]
+    );
+
+    if (!result.rows.length || !verifyPassword(password, result.rows[0].password_hash)) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const user = sanitizeUser(result.rows[0]);
+    const session = await createSession(user.user_id);
+    res.json({ user, token: session.token, expires_at: session.expires_at });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/auth/me", requireAuth, async (req, res) => {
+  res.json({ user: req.user, session_expires_at: req.session.expires_at });
+});
+
+app.post("/api/auth/logout", requireAuth, async (req, res) => {
+  try {
+    await query(`DELETE FROM user_sessions WHERE session_id = $1`, [req.session.session_id]);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.use("/api", requireAuth);
+
 app.get("/api/songs", async (req, res) => {
   try {
     const search = String(req.query.q || "").trim();
-    const hasSearch = Boolean(search);
-    const likePattern = hasSearch ? `%${search}%` : null;
+    const likePattern = search ? `%${search}%` : null;
 
     const result = await query(
       `SELECT
@@ -320,7 +515,7 @@ app.get("/api/songs", async (req, res) => {
         OR COALESCE(a.title, '') ILIKE $2
       )
       ORDER BY s.plays_count DESC, s.song_id ASC`,
-      [DEMO_USER_ID, likePattern]
+      [req.user.user_id, likePattern]
     );
 
     res.json(result.rows);
@@ -337,7 +532,7 @@ app.get("/api/search", async (req, res) => {
     }
 
     const payload = await getDeezerJson(`https://api.deezer.com/search?q=${encodeURIComponent(q)}`);
-    const results = await normalizeSearchResults(payload.data || []);
+    const results = await normalizeSearchResults(payload.data || [], req.user.user_id);
     res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -351,7 +546,7 @@ app.post("/api/import-track", async (req, res) => {
       return res.status(400).json({ error: "Track title and preview URL are required" });
     }
 
-    const importedSong = await importTrackToLibrary(track);
+    const importedSong = await importTrackToLibrary(track, req.user.user_id);
     res.status(201).json(importedSong);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -460,7 +655,7 @@ app.get("/api/artists/:artistId", async (req, res) => {
       LEFT JOIN albums a ON a.album_id = s.album_id
       WHERE sa.artist_id = $1
       ORDER BY s.plays_count DESC, s.song_id ASC`,
-      [req.params.artistId, DEMO_USER_ID]
+      [req.params.artistId, req.user.user_id]
     );
 
     res.json({ ...artistResult.rows[0], songs: songsResult.rows });
@@ -480,14 +675,15 @@ app.get("/api/likes", async (req, res) => {
         s.plays_count,
         ar.artist_id,
         ar.name AS artist_name,
-        ls.liked_at
+        ls.liked_at,
+        TRUE AS liked
       FROM liked_songs ls
       INNER JOIN songs s ON s.song_id = ls.song_id
       LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
       LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
       WHERE ls.user_id = $1
       ORDER BY ls.liked_at DESC`,
-      [DEMO_USER_ID]
+      [req.user.user_id]
     );
 
     res.json(result.rows);
@@ -502,7 +698,7 @@ app.post("/api/likes/:songId", async (req, res) => {
       `INSERT INTO liked_songs (user_id, song_id)
        VALUES ($1, $2)
        ON CONFLICT (user_id, song_id) DO NOTHING`,
-      [DEMO_USER_ID, req.params.songId]
+      [req.user.user_id, req.params.songId]
     );
 
     res.json({ ok: true });
@@ -515,7 +711,7 @@ app.delete("/api/likes/:songId", async (req, res) => {
   try {
     await query(
       `DELETE FROM liked_songs WHERE user_id = $1 AND song_id = $2`,
-      [DEMO_USER_ID, req.params.songId]
+      [req.user.user_id, req.params.songId]
     );
 
     res.json({ ok: true });
@@ -541,7 +737,7 @@ app.get("/api/playlists", async (req, res) => {
       WHERE p.user_id = $1
       GROUP BY p.playlist_id
       ORDER BY p.created_at DESC, p.playlist_id DESC`,
-      [DEMO_USER_ID]
+      [req.user.user_id]
     );
 
     res.json(result.rows);
@@ -562,7 +758,7 @@ app.post("/api/playlists", async (req, res) => {
       `INSERT INTO playlists (name, description, user_id)
        VALUES ($1, $2, $3)
        RETURNING playlist_id, name, description, created_at`,
-      [String(name).trim(), String(description || "").trim(), DEMO_USER_ID]
+      [String(name).trim(), String(description || "").trim(), req.user.user_id]
     );
 
     res.status(201).json(result.rows[0]);
@@ -577,7 +773,7 @@ app.get("/api/playlists/:playlistId", async (req, res) => {
       `SELECT playlist_id, name, description, cover_url, created_at
        FROM playlists
        WHERE playlist_id = $1 AND user_id = $2`,
-      [req.params.playlistId, DEMO_USER_ID]
+      [req.params.playlistId, req.user.user_id]
     );
 
     if (!playlistResult.rows.length) {
@@ -604,7 +800,7 @@ app.get("/api/playlists/:playlistId", async (req, res) => {
       LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
       WHERE ps.playlist_id = $1
       ORDER BY ps.position ASC`,
-      [req.params.playlistId, DEMO_USER_ID]
+      [req.params.playlistId, req.user.user_id]
     );
 
     res.json({ ...playlistResult.rows[0], songs: songsResult.rows });
@@ -623,7 +819,7 @@ app.post("/api/playlists/:playlistId/songs", async (req, res) => {
   try {
     const playlistCheck = await query(
       `SELECT playlist_id FROM playlists WHERE playlist_id = $1 AND user_id = $2`,
-      [req.params.playlistId, DEMO_USER_ID]
+      [req.params.playlistId, req.user.user_id]
     );
 
     if (!playlistCheck.rows.length) {
@@ -652,6 +848,15 @@ app.post("/api/playlists/:playlistId/songs", async (req, res) => {
 
 app.delete("/api/playlists/:playlistId/songs/:songId", async (req, res) => {
   try {
+    const playlistCheck = await query(
+      `SELECT playlist_id FROM playlists WHERE playlist_id = $1 AND user_id = $2`,
+      [req.params.playlistId, req.user.user_id]
+    );
+
+    if (!playlistCheck.rows.length) {
+      return res.status(404).json({ error: "Playlist not found" });
+    }
+
     await query(
       `DELETE FROM playlist_songs
        WHERE playlist_id = $1 AND song_id = $2`,
@@ -669,7 +874,7 @@ app.post("/api/listens/:songId", async (req, res) => {
     await query(
       `INSERT INTO listening_history (user_id, song_id, source)
        VALUES ($1, $2, $3)`,
-      [DEMO_USER_ID, req.params.songId, String(req.body.source || "player")]
+      [req.user.user_id, req.params.songId, String(req.body.source || "player")]
     );
 
     res.status(201).json({ ok: true });

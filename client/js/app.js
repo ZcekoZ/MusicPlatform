@@ -1,4 +1,5 @@
 const state = {
+  user: null,
   view: "home",
   songs: [],
   likes: [],
@@ -7,23 +8,39 @@ const state = {
   currentArtist: null,
   currentPlaylist: null,
   searchQuery: "",
-  searchMode: "library",
   searchResults: []
 };
 
 const els = {
   content: document.getElementById("view-content"),
   title: document.getElementById("view-title"),
+  eyebrow: document.getElementById("topbar-eyebrow"),
   status: document.getElementById("status"),
   player: document.getElementById("player"),
   nowPlayingTitle: document.getElementById("now-playing-title"),
   nowPlayingMeta: document.getElementById("now-playing-meta"),
   nowPlayingCover: document.getElementById("now-playing-cover"),
-  navButtons: Array.from(document.querySelectorAll(".nav-btn")),
+  navButtons: Array.from(document.querySelectorAll(".nav-btn[data-view]")),
   playlistForm: document.getElementById("playlist-form"),
   playlistName: document.getElementById("playlist-name"),
   playlistDescription: document.getElementById("playlist-description"),
-  search: document.getElementById("global-search")
+  playlistCard: document.getElementById("playlist-card"),
+  search: document.getElementById("global-search"),
+  authCard: document.getElementById("auth-card"),
+  userPanel: document.getElementById("user-panel"),
+  userDisplayName: document.getElementById("user-display-name"),
+  userMeta: document.getElementById("user-meta"),
+  logoutBtn: document.getElementById("logout-btn"),
+  showLogin: document.getElementById("show-login"),
+  showRegister: document.getElementById("show-register"),
+  loginForm: document.getElementById("login-form"),
+  registerForm: document.getElementById("register-form"),
+  loginIdentifier: document.getElementById("login-identifier"),
+  loginPassword: document.getElementById("login-password"),
+  registerUsername: document.getElementById("register-username"),
+  registerDisplayName: document.getElementById("register-display-name"),
+  registerEmail: document.getElementById("register-email"),
+  registerPassword: document.getElementById("register-password")
 };
 
 function setStatus(message) {
@@ -49,12 +66,6 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function syncNav() {
-  els.navButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === state.view);
-  });
-}
-
 function emptyState(message) {
   return `<div class="empty-state">${escapeHtml(message)}</div>`;
 }
@@ -65,22 +76,73 @@ function renderIcons() {
   }
 }
 
+function setAuthMode(mode) {
+  const showLogin = mode !== "register";
+  els.showLogin.classList.toggle("active", showLogin);
+  els.showRegister.classList.toggle("active", !showLogin);
+  els.loginForm.classList.toggle("hidden", !showLogin);
+  els.registerForm.classList.toggle("hidden", showLogin);
+}
+
+function updateAuthUi() {
+  const authenticated = Boolean(state.user);
+  els.authCard.classList.toggle("hidden", authenticated);
+  els.userPanel.classList.toggle("hidden", !authenticated);
+  els.playlistCard.classList.toggle("hidden", !authenticated);
+  els.search.disabled = !authenticated;
+
+  if (authenticated) {
+    els.userDisplayName.textContent = state.user.display_name || state.user.username;
+    els.userMeta.textContent = `${state.user.username} • ${state.user.email}`;
+    els.eyebrow.textContent = `Signed in as ${state.user.username}`;
+  } else {
+    els.userDisplayName.textContent = "User";
+    els.userMeta.textContent = "";
+    els.eyebrow.textContent = "Sign in to continue";
+  }
+}
+
+function syncNav() {
+  els.navButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.view);
+    button.disabled = !state.user;
+  });
+}
+
+function renderWelcome() {
+  els.title.textContent = "Welcome to Musicify";
+  els.content.innerHTML = `
+    <section class="detail-panel auth-empty-panel">
+      <div>
+        <p class="eyebrow">Persistent sessions enabled</p>
+        <h3>Login or create an account</h3>
+        <p class="muted">Your token is stored locally so you stay signed in across page refreshes. After signing in, you can like songs, create playlists, import Deezer results, and keep everything tied to your own account.</p>
+      </div>
+      <div class="badge-row">
+        <span class="badge">Deezer 30s previews</span>
+        <span class="badge">Library saved in Postgres</span>
+        <span class="badge">Token-based sessions</span>
+      </div>
+    </section>
+  `;
+}
+
 function trackDataset(song) {
   return `
     data-song-id="${song.song_id || ""}"
     data-deezer-id="${song.deezer_id || song.deezer_track_id || ""}"
     data-title="${escapeHtml(song.title)}"
     data-artist-name="${escapeHtml(song.artist_name || "Unknown artist")}"
+    data-artist-id="${song.artist_id || ""}"
     data-deezer-artist-id="${song.deezer_artist_id || ""}"
-    data-album-title="${escapeHtml(song.album_title || "")}" 
+    data-album-title="${escapeHtml(song.album_title || "")}"
     data-deezer-album-id="${song.deezer_album_id || ""}"
     data-duration-seconds="${song.duration_seconds || 30}"
     data-plays-count="${song.plays_count || 0}"
     data-explicit="${song.explicit ? "1" : "0"}"
-    data-cover-url="${escapeHtml(song.cover_url || song.album_cover || "")}" 
+    data-cover-url="${escapeHtml(song.cover_url || song.album_cover || "")}"
     data-preview-url="${escapeHtml(song.preview_url || song.audio_url || "")}"
-    data-deezer-link="${escapeHtml(song.deezer_link || "")}" 
-    data-imported="${song.song_id ? "1" : "0"}"
+    data-deezer-link="${escapeHtml(song.deezer_link || "")}"
   `;
 }
 
@@ -90,18 +152,7 @@ function songCard(song, options = {}) {
     : "";
 
   const imported = Boolean(song.song_id);
-  const likeButton = `
-    <button
-      class="icon-btn ${song.liked ? "liked" : ""}"
-      data-action="toggle-like"
-      ${trackDataset(song)}
-      data-liked="${song.liked ? "1" : "0"}"
-      aria-label="${song.liked ? "Unlike" : imported ? "Like" : "Save and like"} ${escapeHtml(song.title)}"
-      title="${song.liked ? "Unlike" : imported ? "Like" : "Save and like"}"
-    >
-      <i data-lucide="heart"></i>
-    </button>
-  `;
+  const likeTitle = song.liked ? "Unlike" : imported ? "Like" : "Save and like";
 
   return `
     <article class="song-card">
@@ -118,7 +169,16 @@ function songCard(song, options = {}) {
       </div>
       <div class="song-actions">
         <button class="primary-btn" data-action="play-song" ${trackDataset(song)} data-source="${escapeHtml(options.source || state.view)}">Play preview</button>
-        ${likeButton}
+        <button
+          class="icon-btn ${song.liked ? "liked" : ""}"
+          data-action="toggle-like"
+          ${trackDataset(song)}
+          data-liked="${song.liked ? "1" : "0"}"
+          aria-label="${likeTitle} ${escapeHtml(song.title)}"
+          title="${likeTitle}"
+        >
+          <i data-lucide="heart"></i>
+        </button>
         ${song.artist_id ? `<button data-action="open-artist" data-artist-id="${song.artist_id}">Artist page</button>` : `<button data-action="save-and-open-artist" ${trackDataset(song)}>Save artist page</button>`}
         ${song.song_id ? "" : `<button data-action="import-track" ${trackDataset(song)}>Save to library</button>`}
         ${state.playlists.length ? `
@@ -137,7 +197,7 @@ function renderHome() {
   const showingSearch = Boolean(state.searchQuery);
   els.title.textContent = showingSearch ? `Search: ${state.searchQuery}` : "Browse songs";
 
-  const librarySection = showingSearch
+  els.content.innerHTML = showingSearch
     ? `
       <section class="panel">
         <p class="eyebrow">Library matches</p>
@@ -146,27 +206,23 @@ function renderHome() {
       </section>
       <section class="panel">
         <p class="eyebrow">Deezer results</p>
-        <p class="search-results-note muted">Search results can now be saved directly into your database, then liked and added to playlists persistently.</p>
+        <p class="search-results-note muted">Search results can be saved directly into your database, then liked and added to playlists permanently.</p>
         ${state.searchResults.length ? `<div class="song-list">${state.searchResults.map((song) => songCard(song, { source: "search" })).join("")}</div>` : emptyState("No Deezer preview results found.")}
       </section>
     `
     : `
       <section class="stats-grid">
         <div class="stat-card"><p class="eyebrow">Songs</p><h3>${state.songs.length}</h3><p class="muted">Stored in PostgreSQL and playable with Deezer previews.</p></div>
-        <div class="stat-card"><p class="eyebrow">Liked songs</p><h3>${state.likes.length}</h3><p class="muted">Saved by the demo user.</p></div>
+        <div class="stat-card"><p class="eyebrow">Liked songs</p><h3>${state.likes.length}</h3><p class="muted">Saved on your account.</p></div>
         <div class="stat-card"><p class="eyebrow">Playlists</p><h3>${state.playlists.length}</h3><p class="muted">Personal collections.</p></div>
         <div class="stat-card"><p class="eyebrow">Artists</p><h3>${state.artists.length}</h3><p class="muted">Dedicated artist pages.</p></div>
       </section>
       <section class="panel">
         <p class="eyebrow">Library</p>
         <h3>All songs</h3>
-        <div class="song-list">
-          ${state.songs.map((song) => songCard(song, { source: "home" })).join("")}
-        </div>
+        <div class="song-list">${state.songs.map((song) => songCard(song, { source: "home" })).join("")}</div>
       </section>
     `;
-
-  els.content.innerHTML = librarySection;
 }
 
 function renderLikes() {
@@ -189,12 +245,8 @@ function renderPlaylists() {
             <p class="eyebrow">Playlist</p>
             <h3>${escapeHtml(playlist.name)}</h3>
             <p class="muted">${escapeHtml(playlist.description || "No description yet.")}</p>
-            <div class="badge-row">
-              <span class="badge">${playlist.songs.length} songs</span>
-            </div>
-            <div class="actions">
-              <button class="inline-btn" data-action="back-to-playlists">Back to playlists</button>
-            </div>
+            <div class="badge-row"><span class="badge">${playlist.songs.length} songs</span></div>
+            <div class="actions"><button class="inline-btn" data-action="back-to-playlists">Back to playlists</button></div>
           </div>
         </div>
         ${playlist.songs.length ? `<div class="song-list">${playlist.songs.map((song) => songCard(song, { source: "playlist", removableFromPlaylist: playlist.playlist_id })).join("")}</div>` : emptyState("This playlist is empty. Add songs from Home or Artist pages.")}
@@ -234,18 +286,13 @@ function renderArtists() {
             <h3>${escapeHtml(artist.name)}</h3>
             <p class="muted">${escapeHtml(artist.bio || "No bio available.")}</p>
             <div class="badge-row">
-              <span class="badge">${escapeHtml(artist.country || "Unknown country")}</span>
               <span class="badge">${formatNumber(artist.monthly_listeners)} monthly listeners</span>
               <span class="badge">${formatNumber(artist.followers_count)} followers</span>
             </div>
-            <div class="actions">
-              <button class="inline-btn" data-action="back-to-artists">Back to artists</button>
-            </div>
+            <div class="actions"><button class="inline-btn" data-action="back-to-artists">Back to artists</button></div>
           </div>
         </div>
-        <div class="song-list">
-          ${artist.songs.map((song) => songCard({ ...song, artist_name: artist.name, artist_id: artist.artist_id }, { source: "artist" })).join("")}
-        </div>
+        ${artist.songs.length ? `<div class="song-list">${artist.songs.map((song) => songCard(song, { source: "artist" })).join("")}</div>` : emptyState("No songs for this artist yet.")}
       </section>
     `;
     return;
@@ -270,6 +317,14 @@ function renderArtists() {
 
 function renderView() {
   syncNav();
+  updateAuthUi();
+
+  if (!state.user) {
+    renderWelcome();
+    renderIcons();
+    return;
+  }
+
   if (state.view === "home") renderHome();
   if (state.view === "likes") renderLikes();
   if (state.view === "playlists") renderPlaylists();
@@ -278,13 +333,13 @@ function renderView() {
 }
 
 function mergeSongLike(songId, liked) {
-  state.songs = state.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
-  state.searchResults = state.searchResults.map((song) => song.song_id === songId ? { ...song, liked, imported: true } : song);
+  state.songs = state.songs.map((song) => Number(song.song_id) === Number(songId) ? { ...song, liked } : song);
+  state.searchResults = state.searchResults.map((song) => Number(song.song_id) === Number(songId) ? { ...song, liked, imported: true } : song);
   if (state.currentArtist) {
-    state.currentArtist.songs = state.currentArtist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+    state.currentArtist.songs = state.currentArtist.songs.map((song) => Number(song.song_id) === Number(songId) ? { ...song, liked } : song);
   }
   if (state.currentPlaylist) {
-    state.currentPlaylist.songs = state.currentPlaylist.songs.map((song) => song.song_id === songId ? { ...song, liked } : song);
+    state.currentPlaylist.songs = state.currentPlaylist.songs.map((song) => Number(song.song_id) === Number(songId) ? { ...song, liked } : song);
   }
 }
 
@@ -331,7 +386,7 @@ async function ensureImportedFromElement(element) {
 
 async function refreshData() {
   const [songs, likes, playlists, artists] = await Promise.all([
-    getSongs(state.searchMode === "library" ? state.searchQuery : ""),
+    getSongs(state.searchQuery),
     getLikes(),
     getPlaylists(),
     getArtists()
@@ -344,6 +399,8 @@ async function refreshData() {
 }
 
 async function runSearch(query) {
+  if (!state.user) return;
+
   state.searchQuery = query.trim();
   state.currentArtist = null;
   state.currentPlaylist = null;
@@ -365,19 +422,45 @@ async function runSearch(query) {
     renderView();
     setStatus("Ready");
   } catch (error) {
+    if (error.message.toLowerCase().includes("session") || error.message.toLowerCase().includes("auth")) {
+      await handleLoggedOutState();
+    }
     setStatus(error.message);
   }
 }
 
-async function init() {
+async function handleLoggedOutState() {
+  clearAuthToken();
+  state.user = null;
+  state.songs = [];
+  state.likes = [];
+  state.playlists = [];
+  state.artists = [];
+  state.currentArtist = null;
+  state.currentPlaylist = null;
+  state.searchQuery = "";
+  state.searchResults = [];
+  els.search.value = "";
+  renderView();
+}
+
+async function bootstrapSession() {
+  const token = getAuthToken();
+  if (!token) {
+    renderView();
+    return;
+  }
+
   try {
-    setStatus("Loading library…");
+    setStatus("Restoring session…");
+    const payload = await getCurrentUser();
+    state.user = payload.user;
     await refreshData();
     renderView();
     setStatus("Ready");
   } catch (error) {
-    setStatus(error.message);
-    els.content.innerHTML = emptyState(error.message);
+    await handleLoggedOutState();
+    setStatus("Session expired. Please sign in again.");
   }
 }
 
@@ -526,8 +609,63 @@ async function saveAndOpenArtistFromElement(element) {
   }
 }
 
+els.showLogin.addEventListener("click", () => setAuthMode("login"));
+els.showRegister.addEventListener("click", () => setAuthMode("register"));
+
+els.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    setStatus("Signing in…");
+    const payload = await loginUser({
+      identifier: els.loginIdentifier.value,
+      password: els.loginPassword.value
+    });
+    setAuthToken(payload.token);
+    state.user = payload.user;
+    els.loginForm.reset();
+    await refreshData();
+    renderView();
+    setStatus("Logged in");
+  } catch (error) {
+    setStatus(error.message);
+  }
+});
+
+els.registerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    setStatus("Creating account…");
+    const payload = await registerUser({
+      username: els.registerUsername.value,
+      displayName: els.registerDisplayName.value,
+      email: els.registerEmail.value,
+      password: els.registerPassword.value
+    });
+    setAuthToken(payload.token);
+    state.user = payload.user;
+    els.registerForm.reset();
+    await refreshData();
+    renderView();
+    setStatus("Account created");
+  } catch (error) {
+    setStatus(error.message);
+  }
+});
+
+els.logoutBtn.addEventListener("click", async () => {
+  try {
+    setStatus("Logging out…");
+    await logoutUser();
+  } catch (error) {
+    // ignore and clear locally anyway
+  }
+  await handleLoggedOutState();
+  setStatus("Logged out");
+});
+
 els.navButtons.forEach((button) => {
   button.addEventListener("click", async () => {
+    if (!state.user) return;
     state.view = button.dataset.view;
     state.currentArtist = null;
     state.currentPlaylist = null;
@@ -561,7 +699,7 @@ els.playlistForm.addEventListener("submit", async (event) => {
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
-  if (!target) return;
+  if (!target || !state.user) return;
 
   const action = target.dataset.action;
   if (action === "play-song") return playSong(target.dataset.songId, target.dataset.source, target);
@@ -585,9 +723,11 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("change", (event) => {
   const select = event.target.closest("select[data-action='playlist-select']");
-  if (!select) return;
+  if (!select || !state.user) return;
   addSelectedSongToPlaylistFromElement(select, select.value);
   select.value = "";
 });
 
-init();
+setAuthMode("login");
+renderView();
+bootstrapSession();

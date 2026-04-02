@@ -11,8 +11,37 @@
     <aside class="sidebar">
       <div>
         <h1>Musicify</h1>
-        <p class="muted">Deezer 30-second previews, likes, playlists, and artist pages.</p>
+        <p class="muted">Deezer 30-second previews, likes, playlists, artist pages, and persistent logins.</p>
       </div>
+
+      <section id="auth-card" class="auth-card">
+        <div class="auth-tabs">
+          <button id="show-login" class="nav-btn active" type="button">Login</button>
+          <button id="show-register" class="nav-btn" type="button">Register</button>
+        </div>
+
+        <form id="login-form" class="auth-form">
+          <input id="login-identifier" type="text" placeholder="Email or username" required>
+          <input id="login-password" type="password" placeholder="Password" required>
+          <button type="submit">Login</button>
+          <p class="muted auth-hint">Seed users use password <strong>password123</strong>.</p>
+        </form>
+
+        <form id="register-form" class="auth-form hidden">
+          <input id="register-username" type="text" placeholder="Username" required>
+          <input id="register-display-name" type="text" placeholder="Display name" required>
+          <input id="register-email" type="email" placeholder="Email" required>
+          <input id="register-password" type="password" placeholder="Password (6+ chars)" required>
+          <button type="submit">Create account</button>
+        </form>
+      </section>
+
+      <section id="user-panel" class="user-panel hidden">
+        <p class="eyebrow">Signed in</p>
+        <h3 id="user-display-name">User</h3>
+        <p id="user-meta" class="muted"></p>
+        <button id="logout-btn" type="button">Logout</button>
+      </section>
 
       <nav class="nav">
         <button class="nav-btn active" data-view="home">Home</button>
@@ -21,7 +50,7 @@
         <button class="nav-btn" data-view="artists">Artists</button>
       </nav>
 
-      <section class="create-playlist-card">
+      <section id="playlist-card" class="create-playlist-card hidden">
         <h3>Create playlist</h3>
         <form id="playlist-form">
           <input id="playlist-name" type="text" placeholder="Playlist name" required>
@@ -34,12 +63,12 @@
     <main class="content">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Demo user</p>
+          <p id="topbar-eyebrow" class="eyebrow">Sign in to continue</p>
           <h2 id="view-title">Browse songs</h2>
         </div>
         <div class="topbar-actions">
           <label class="search-wrap">
-            <input id="global-search" class="search-input" type="search" placeholder="Search library or Deezer…">
+            <input id="global-search" class="search-input" type="search" placeholder="Search library or Deezer…" disabled>
           </label>
           <p id="status" class="status">Ready</p>
         </div>
