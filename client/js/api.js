@@ -1,5 +1,5 @@
 
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = "https://musicplatformserver.onrender.com/api";
 
 async function getSongs() {
   const res = await fetch(API_BASE + "/songs");
