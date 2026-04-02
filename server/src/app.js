@@ -49,6 +49,10 @@ app.get("/api/health", async (req, res) => {
 
 app.get("/api/songs", async (req, res) => {
   try {
+    const search = String(req.query.q || "").trim();
+    const hasSearch = Boolean(search);
+    const likePattern = hasSearch ? `%${search}%` : null;
+
     const result = await query(
       `SELECT
         s.song_id,
@@ -71,11 +75,56 @@ app.get("/api/songs", async (req, res) => {
       LEFT JOIN albums a ON a.album_id = s.album_id
       LEFT JOIN song_artists sa ON sa.song_id = s.song_id AND sa.is_primary = TRUE
       LEFT JOIN artists ar ON ar.artist_id = sa.artist_id
-      ORDER BY s.song_id`,
-      [DEMO_USER_ID]
+      WHERE (
+        $2::text IS NULL
+        OR s.title ILIKE $2
+        OR COALESCE(ar.name, '') ILIKE $2
+        OR COALESCE(a.title, '') ILIKE $2
+      )
+      ORDER BY s.plays_count DESC, s.song_id ASC`,
+      [DEMO_USER_ID, likePattern]
     );
 
     res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/search", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) {
+      return res.json([]);
+    }
+
+    const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}`);
+    if (!response.ok) {
+      throw new Error(`Deezer request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const results = (payload.data || [])
+      .filter((track) => track.preview)
+      .slice(0, 20)
+      .map((track) => ({
+        source: "deezer",
+        deezer_id: track.id,
+        song_id: null,
+        title: track.title,
+        artist_name: track.artist?.name || "Unknown artist",
+        album_title: track.album?.title || null,
+        duration_seconds: track.duration || 30,
+        plays_count: track.rank || 0,
+        explicit: Boolean(track.explicit_lyrics),
+        cover_url: track.album?.cover_medium || track.album?.cover || null,
+        preview_url: track.preview,
+        deezer_link: track.link || null,
+        liked: false,
+        artist_id: null
+      }));
+
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

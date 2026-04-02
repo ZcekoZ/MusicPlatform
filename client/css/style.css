@@ -208,4 +208,54 @@ body { padding-bottom: 110px; }
   .content { padding: 18px; }
   .song-card { grid-template-columns: 1fr; }
   .song-actions { justify-content: flex-start; }
+  .topbar { flex-direction: column; align-items: stretch; }
+  .topbar-actions, .search-wrap { width: 100%; align-items: stretch; }
+}
+
+.topbar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: min(100%, 360px);
+}
+
+.search-wrap {
+  width: min(100%, 360px);
+}
+
+.song-actions select {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.icon-btn {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-btn.liked {
+  background: rgba(29, 185, 84, 0.14);
+  border-color: rgba(29, 185, 84, 0.45);
+  color: #b8ffd1;
+}
+
+.icon-btn.liked svg {
+  fill: currentColor;
+}
+
+.search-results-note {
+  margin: 0 0 14px;
 }

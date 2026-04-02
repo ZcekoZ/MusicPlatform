@@ -20,8 +20,13 @@ async function request(path, options = {}) {
   return response.json();
 }
 
-function getSongs() {
-  return request("/songs");
+function getSongs(query = "") {
+  const suffix = query ? `?q=${encodeURIComponent(query)}` : "";
+  return request(`/songs${suffix}`);
+}
+
+function searchTracks(query) {
+  return request(`/search?q=${encodeURIComponent(query)}`);
 }
 
 function getSongPreview(songId) {
